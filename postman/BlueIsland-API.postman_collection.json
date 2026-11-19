@@ -1,0 +1,114 @@
+{
+  "info": {
+    "name": "BlueIsland Coffee API",
+    "description": "Smoke/regression collection cho auth, menu CRUD, POS/order, thống kê và phân quyền. Chạy tuần tự trong Collection Runner sau khi backend + MySQL hoạt động.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:8001" },
+    { "key": "adminToken", "value": "" },
+    { "key": "staffToken", "value": "" },
+    { "key": "orderProductId", "value": "" },
+    { "key": "productId", "value": "" },
+    { "key": "orderId", "value": "" },
+    { "key": "createdStaffId", "value": "" },
+    { "key": "testStaffUsername", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "01 - Health",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/health" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('API và database hoạt động', () => {", "  pm.response.to.have.status(200);", "  const body = pm.response.json();", "  pm.expect(body.status).to.eql('ok');", "  pm.expect(body.database).to.eql('connected');", "});"] } }]
+    },
+    {
+      "name": "02 - Categories",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/categories" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Có đủ 7 danh mục seed', () => {", "  pm.response.to.have.status(200);", "  const rows = pm.response.json();", "  pm.expect(rows).to.have.length(7);", "  pm.expect(rows[0]).to.have.all.keys('id', 'code', 'name');", "});"] } }]
+    },
+    {
+      "name": "03 - Login admin",
+      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"username\": \"admin\",\n  \"password\": \"Admin@123\"\n}" }, "url": "{{baseUrl}}/api/auth/login" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Admin đăng nhập và nhận JWT', () => {", "  pm.response.to.have.status(200);", "  const body = pm.response.json();", "  pm.expect(body.access_token).to.be.a('string').and.not.empty;", "  pm.expect(body.role).to.eql('admin');", "  pm.expect(body.isStaff).to.eql(false);", "  pm.collectionVariables.set('adminToken', body.access_token);", "});"] } }]
+    },
+    {
+      "name": "04 - Login staff",
+      "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"username\": \"staff\",\n  \"password\": \"Staff@123\"\n}" }, "url": "{{baseUrl}}/api/auth/login" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Staff đăng nhập và nhận JWT', () => {", "  pm.response.to.have.status(200);", "  const body = pm.response.json();", "  pm.expect(body.access_token).to.be.a('string').and.not.empty;", "  pm.expect(body.role).to.eql('staff');", "  pm.expect(body.isStaff).to.eql(true);", "  pm.collectionVariables.set('staffToken', body.access_token);", "});"] } }]
+    },
+    {
+      "name": "05 - Auth me (staff)",
+      "request": { "method": "GET", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{staffToken}}", "type": "string" }] }, "url": "{{baseUrl}}/api/auth/me" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('JWT xác định đúng staff', () => {", "  pm.response.to.have.status(200);", "  pm.expect(pm.response.json().role).to.eql('staff');", "});"] } }]
+    },
+    {
+      "name": "06 - Menu search (lưu product id cho POS)",
+      "request": { "method": "GET", "url": "{{baseUrl}}/api/menu?q=ca&category=all" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Tìm kiếm trả món đang bán có cấu trúc đúng', () => {", "  pm.response.to.have.status(200);", "  const rows = pm.response.json();", "  pm.expect(rows.length).to.be.greaterThan(0);", "  pm.expect(rows[0]).to.have.all.keys('id', 'name', 'description', 'price', 'image_url', 'tag', 'category_code', 'category_name', 'is_available');", "  pm.expect(rows[0].is_available).to.eql(true);", "  pm.collectionVariables.set('orderProductId', rows[0].id);", "});"] } }]
+    },
+    {
+      "name": "07 - Staff không được xem admin stats (403)",
+      "request": { "method": "GET", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{staffToken}}", "type": "string" }] }, "url": "{{baseUrl}}/api/admin/stats/summary" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('RBAC chặn staff khỏi route admin', () => {", "  pm.response.to.have.status(403);", "});"] } }]
+    },
+    {
+      "name": "08 - Admin tạo món (CRUD create)",
+      "request": { "method": "POST", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] }, "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"name\": \"Postman API Test {{$timestamp}}\",\n  \"description\": \"Món tạo để smoke test API\",\n  \"price\": 10000,\n  \"image_url\": \"\",\n  \"tag\": \"test\",\n  \"category_code\": \"coffee\",\n  \"is_available\": true\n}" }, "url": "{{baseUrl}}/api/admin/menu" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Admin tạo món mới (201)', () => {", "  pm.response.to.have.status(201);", "  const body = pm.response.json();", "  pm.expect(body.id).to.be.a('number');", "  pm.expect(body.name).to.include('Postman API Test');", "  pm.collectionVariables.set('productId', body.id);", "});"] } }]
+    },
+    {
+      "name": "09 - Admin sửa món (CRUD update)",
+      "request": { "method": "PUT", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] }, "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"name\": \"Postman API Test Updated\",\n  \"description\": \"Đã cập nhật\",\n  \"price\": 12000,\n  \"image_url\": \"\",\n  \"tag\": \"updated\",\n  \"category_code\": \"coffee\",\n  \"is_available\": true\n}" }, "url": "{{baseUrl}}/api/admin/menu/{{productId}}" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Admin cập nhật món (200)', () => {", "  pm.response.to.have.status(200);", "  pm.expect(pm.response.json().price).to.eql(12000);", "});"] } }]
+    },
+    {
+      "name": "10 - Staff tạo đơn (POS)",
+      "request": { "method": "POST", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{staffToken}}", "type": "string" }] }, "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"order_type\": \"takeaway\",\n  \"customer_name\": \"Postman Test\",\n  \"payment_method\": \"cash\",\n  \"cash_received\": 100000,\n  \"discount\": 0,\n  \"items\": [{\"product_id\": {{orderProductId}}, \"quantity\": 1, \"options\": []}]\n}" }, "url": "{{baseUrl}}/api/orders" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Staff tạo đơn, server tự tính tiền (201)', () => {", "  pm.response.to.have.status(201);", "  const body = pm.response.json();", "  pm.expect(body.total).to.be.a('number');", "  pm.expect(body.total).to.eql(body.subtotal - body.discount);", "  pm.expect(body.status).to.eql('waiting');", "  pm.collectionVariables.set('orderId', body.id);", "});"] } }]
+    },
+    {
+      "name": "11 - Cập nhật trạng thái đơn",
+      "request": { "method": "PATCH", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{staffToken}}", "type": "string" }] }, "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"status\": \"preparing\"\n}" }, "url": "{{baseUrl}}/api/orders/{{orderId}}/status" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Đơn chuyển sang đang pha (200)', () => {", "  pm.response.to.have.status(200);", "  pm.expect(pm.response.json().status).to.eql('preparing');", "});"] } }]
+    },
+    {
+      "name": "12 - Admin xem thống kê",
+      "request": { "method": "GET", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] }, "url": "{{baseUrl}}/api/admin/stats/summary" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Admin nhận summary report', () => {", "  pm.response.to.have.status(200);", "  const body = pm.response.json();", "  pm.expect(body.order_count).to.be.a('number');", "  pm.expect(body.revenue).to.be.a('number');", "});"] } }]
+    },
+    {
+      "name": "12a - Báo cáo doanh thu theo ngày",
+      "request": { "method": "GET", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] }, "url": "{{baseUrl}}/api/admin/stats/daily?days=7" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Daily report trả đủ 7 ngày', () => {", "  pm.response.to.have.status(200);", "  pm.expect(pm.response.json()).to.have.length(7);", "});"] } }]
+    },
+    {
+      "name": "12b - Top món",
+      "request": { "method": "GET", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] }, "url": "{{baseUrl}}/api/admin/stats/top-products?limit=5" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Top products trả danh sách hợp lệ', () => {", "  pm.response.to.have.status(200);", "  pm.expect(pm.response.json()).to.be.an('array');", "});"] } }]
+    },
+    {
+      "name": "12c - Danh sách nhân viên",
+      "request": { "method": "GET", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] }, "url": "{{baseUrl}}/api/admin/staff" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Admin xem được danh sách staff', () => {", "  pm.response.to.have.status(200);", "  pm.expect(pm.response.json()).to.be.an('array');", "});"] } }]
+    },
+    {
+      "name": "12d - Admin tạo tài khoản staff",
+      "request": { "method": "POST", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] }, "header": [{ "key": "Content-Type", "value": "application/json" }], "body": { "mode": "raw", "raw": "{\n  \"username\": \"api-test-{{$timestamp}}\",\n  \"full_name\": \"Postman Test Staff\",\n  \"password\": \"TestPass@123\",\n  \"role\": \"staff\"\n}" }, "url": "{{baseUrl}}/api/admin/staff" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Tạo staff mới (201)', () => {", "  pm.response.to.have.status(201);", "  const body = pm.response.json();", "  pm.expect(body.role).to.eql('staff');", "  pm.collectionVariables.set('createdStaffId', body.id);", "  pm.collectionVariables.set('testStaffUsername', body.username);", "});"] } }]
+    },
+    {
+      "name": "12e - Vô hiệu hóa tài khoản test",
+      "request": { "method": "PATCH", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] }, "url": "{{baseUrl}}/api/admin/staff/{{createdStaffId}}/active?active=false" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Admin vô hiệu hóa tài khoản', () => {", "  pm.response.to.have.status(200);", "  pm.expect(pm.response.json().is_active).to.eql(false);", "});"] } }]
+    },
+    {
+      "name": "12f - Staff xem lịch sử đơn",
+      "request": { "method": "GET", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{staffToken}}", "type": "string" }] }, "url": "{{baseUrl}}/api/orders" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Staff xem được lịch sử đơn', () => {", "  pm.response.to.have.status(200);", "  const rows = pm.response.json();", "  pm.expect(rows).to.be.an('array');", "  pm.expect(rows.some((row) => String(row.id) === String(pm.collectionVariables.get('orderId')))).to.eql(true);", "});"] } }]
+    },
+    {
+      "name": "13 - Admin xóa mềm món test",
+      "request": { "method": "DELETE", "auth": { "type": "bearer", "bearer": [{ "key": "token", "value": "{{adminToken}}", "type": "string" }] }, "url": "{{baseUrl}}/api/admin/menu/{{productId}}" },
+      "event": [{ "listen": "test", "script": { "exec": ["pm.test('Xóa món là chuyển sang ngừng bán', () => {", "  pm.response.to.have.status(200);", "  pm.expect(pm.response.json().message).to.be.a('string');", "});"] } }]
+    }
+  ]
+}
