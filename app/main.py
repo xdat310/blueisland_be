@@ -7,7 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 from app.config import settings
 from app.database import Base, SessionLocal, engine, get_db
-from app.models import CafeOrder, Category, OrderItem, Product, User
+from app.models import CafeOrder, Category, OrderItem, Product, StaffShift, User
 from app.schemas import LoginInput, OrderInput, ProductInput, StatusInput, TokenOut, UserOut
 from app.security import current_user, make_token, require_admin, verify_password, hash_password
 from app.seed import seed_database
@@ -231,4 +231,181 @@ def set_staff_active(user_id: int, active: bool, db: Session = Depends(get_db), 
     u.is_active = active; db.commit()
     return {"id": u.id, "is_active": u.is_active}
 
+@app.patch("/api/admin/staff/{user_id}")
+def update_staff(user_id: int, payload: dict, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    u = db.get(User, user_id)
+    if not u:
+        raise HTTPException(404, "Không tìm thấy tài khoản")
+    if payload.get("full_name"):
+        u.full_name = str(payload["full_name"]).strip()
+    if "email" in payload:
+        u.email = str(payload["email"]).strip() or None
+    if payload.get("password"):
+        pw = str(payload["password"]).strip()
+        if len(pw) < 4:
+            raise HTTPException(422, "Mật khẩu phải có ít nhất 4 ký tự")
+        u.password_hash = hash_password(pw)
+    db.commit()
+    db.refresh(u)
+    return {
+        "id": u.id,
+        "username": u.username,
+        "full_name": u.full_name,
+        "email": u.email,
+        "role": u.role,
+        "employee_code": u.employee_code,
+        "is_active": u.is_active,
+    }
+
+
+@app.post("/api/admin/staff/{user_id}/reset-password")
+def reset_staff_password(user_id: int, payload: dict, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    u = db.get(User, user_id)
+    if not u:
+        raise HTTPException(404, "Không tìm thấy tài khoản")
+    pw = str(payload.get("password") or "").strip()
+    if len(pw) < 4:
+        raise HTTPException(422, "Mật khẩu phải có ít nhất 4 ký tự")
+    u.password_hash = hash_password(pw)
+    db.commit()
+    return {
+        "ok": True,
+        "staff": {
+            "id": str(u.id),
+            "code": u.employee_code or u.username.upper(),
+            "name": u.full_name,
+        },
+    }
+
+@app.post("/api/auth/register", status_code=201, response_model=TokenOut)
+def register_customer(payload: dict, db: Session = Depends(get_db)):
+    full_name = str(payload.get("full_name") or payload.get("name") or "").strip()
+    email_raw = str(payload.get("email") or "").strip().lower()
+    email = email_raw or None
+    username = str(payload.get("username") or email_raw or "").strip().lower()
+    password = str(payload.get("password") or "").strip()
+
+    if not full_name or not username or not password:
+        raise HTTPException(422, "Họ tên, tên đăng nhập và mật khẩu là bắt buộc")
+    if len(password) < 6:
+        raise HTTPException(422, "Mật khẩu phải có ít nhất 6 ký tự")
+    if db.query(User).filter(User.username == username).first():
+        raise HTTPException(409, "Tên đăng nhập đã tồn tại")
+    if email and db.query(User).filter(User.email == email).first():
+        raise HTTPException(409, "Email đã được đăng ký")
+
+    u = User(
+        username=username,
+        full_name=full_name,
+        email=email,
+        role="customer",
+        is_active=True,
+        password_hash=hash_password(password),
+    )
+    db.add(u)
+    db.commit()
+    db.refresh(u)
+    token = make_token(u)
+    return {
+        "access_token": token,
+        "token": token,
+        "role": "customer",
+        "isStaff": False,
+        "staffProfile": None,
+        "user": u,
+    }
+
+
+@app.get("/api/customer/orders")
+def list_customer_orders(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    rows = (
+        db.query(CafeOrder)
+        .options(joinedload(CafeOrder.staff), joinedload(CafeOrder.items))
+        .filter(CafeOrder.staff_id == user.id)
+        .order_by(CafeOrder.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    return [order_out(o) for o in rows]
+
+@app.post("/api/staff/shifts/close", status_code=201)
+def close_staff_shift(payload: dict, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    ended_at = datetime.now()
+    ts = payload.get("started_at_ts")
+    if ts:
+        try:
+            started_at = datetime.fromtimestamp(float(ts) / 1000.0)
+        except Exception:
+            started_at = datetime.combine(date.today(), time.min)
+    else:
+        started_at = datetime.combine(date.today(), time.min)
+
+    rows = (
+        db.query(CafeOrder)
+        .filter(
+            CafeOrder.staff_id == user.id,
+            CafeOrder.status != "cancelled",
+            CafeOrder.created_at >= started_at,
+            CafeOrder.created_at <= ended_at,
+        )
+        .all()
+    )
+    order_count = len(rows)
+    cash_total = sum(o.total for o in rows if o.payment_method == "cash")
+    transfer_total = sum(o.total for o in rows if o.payment_method == "transfer")
+
+    sh = StaffShift(
+        staff_id=user.id,
+        started_at=started_at,
+        ended_at=ended_at,
+        order_count=order_count,
+        cash_total=cash_total,
+        transfer_total=transfer_total,
+    )
+    db.add(sh)
+    db.commit()
+    db.refresh(sh)
+    return {
+        "id": sh.id,
+        "staff_code": user.employee_code or user.username.upper(),
+        "staff_name": user.full_name,
+        "started_at": sh.started_at.isoformat(),
+        "ended_at": sh.ended_at.isoformat(),
+        "order_count": sh.order_count,
+        "cash_total": sh.cash_total,
+        "transfer_total": sh.transfer_total,
+    }
+
+
+@app.get("/api/admin/shifts")
+def list_closed_shifts(db: Session = Depends(get_db), _: User = Depends(require_admin)):
+    rows = (
+        db.query(StaffShift)
+        .options(joinedload(StaffShift.staff))
+        .order_by(StaffShift.ended_at.desc())
+        .limit(100)
+        .all()
+    )
+    return [
+        {
+            "id": sh.id,
+            "staff_code": (sh.staff.employee_code or sh.staff.username.upper()) if sh.staff else f"NV#{sh.staff_id}",
+            "staff_name": sh.staff.full_name if sh.staff else "Nhân viên",
+            "started_at": sh.started_at.isoformat() if sh.started_at else None,
+            "ended_at": sh.ended_at.isoformat() if sh.ended_at else None,
+            "order_count": sh.order_count,
+            "cash_total": sh.cash_total,
+            "transfer_total": sh.transfer_total,
+        }
+        for sh in rows
+    ]
+
+
+# Phục vụ trực tiếp Frontend trên cùng cổng 5500 (đặt cuối file để ưu tiên /api/*)
+from pathlib import Path as _Path
+from fastapi.staticfiles import StaticFiles
+
+_fe_dir = _Path(r"C:\Users\PC\OneDrive\Desktop\BlueIsland fe")
+if _fe_dir.is_dir():
+    app.mount("/", StaticFiles(directory=str(_fe_dir), html=True), name="frontend")
 

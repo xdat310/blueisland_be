@@ -11,7 +11,7 @@ class User(Base):
     full_name: Mapped[str] = mapped_column(String(120))
     email: Mapped[str | None] = mapped_column(String(160), unique=True, nullable=True)
     password_hash: Mapped[str] = mapped_column(String(255))
-    role: Mapped[str] = mapped_column(Enum("admin", "staff", name="user_role"), default="staff")
+    role: Mapped[str] = mapped_column(Enum("admin", "staff", "customer", name="user_role"), default="staff")
     employee_code: Mapped[str | None] = mapped_column(String(30), unique=True, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
@@ -70,4 +70,16 @@ class OrderItem(Base):
     line_total: Mapped[int] = mapped_column(Integer)
     order: Mapped[CafeOrder] = relationship(back_populates="items")
     product: Mapped[Product] = relationship()
+
+
+class StaffShift(Base):
+    __tablename__ = "staff_shifts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    staff_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime)
+    ended_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    order_count: Mapped[int] = mapped_column(Integer, default=0)
+    cash_total: Mapped[int] = mapped_column(Integer, default=0)
+    transfer_total: Mapped[int] = mapped_column(Integer, default=0)
+    staff: Mapped["User"] = relationship()
 
