@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Optional, List, Dict
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -12,7 +13,7 @@ class UserOut(BaseModel):
     username: str
     full_name: str
     role: str
-    employee_code: str | None = None
+    employee_code: Optional[str] = None
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -22,7 +23,7 @@ class TokenOut(BaseModel):
     token_type: str = "bearer"
     role: str
     isStaff: bool
-    staffProfile: dict | None = None
+    staffProfile: Optional[Dict] = None
     user: UserOut
 
 
@@ -31,7 +32,7 @@ class ProductInput(BaseModel):
     description: str = ""
     price: int = Field(gt=0)
     image_url: str = ""
-    tag: str | None = None
+    tag: Optional[str] = None
     category_code: str
     is_available: bool = True
 
@@ -42,7 +43,7 @@ class ProductOut(BaseModel):
     description: str
     price: int
     image_url: str
-    tag: str | None
+    tag: Optional[str]
     category_code: str
     category_name: str
     is_available: bool
@@ -51,18 +52,20 @@ class ProductOut(BaseModel):
 class OrderLineInput(BaseModel):
     product_id: int
     quantity: int = Field(gt=0, le=99)
-    options: list[dict] = []
+    options: List[Dict] = []
 
 
 class OrderInput(BaseModel):
     order_type: str = "dine-in"
-    table_code: str | None = None
+    table_code: Optional[str] = None
     customer_name: str = "Khách lẻ"
-    student_id: str | None = None
+    student_id: Optional[str] = None
+    address: Optional[str] = None
+    phone_number: Optional[str] = None
     payment_method: str = "cash"
     cash_received: int = 0
     discount: int = Field(default=0, ge=0)
-    items: list[OrderLineInput] = Field(min_length=1)
+    items: List[OrderLineInput] = Field(min_length=1)
 
 
 class StatusInput(BaseModel):
@@ -73,8 +76,11 @@ class OrderOut(BaseModel):
     id: int
     order_code: str
     order_type: str
-    table_code: str | None
+    table_code: Optional[str]
     customer_name: str
+    student_id: Optional[str]
+    address: Optional[str]
+    phone_number: Optional[str]
     payment_method: str
     subtotal: int
     discount: int
@@ -82,5 +88,5 @@ class OrderOut(BaseModel):
     cash_received: int
     status: str
     created_at: datetime
-    items: list[dict]
+    items: List[Dict]
 

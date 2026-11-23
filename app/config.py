@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     mysql_database: str = "blueisland_cafe"
     mysql_user: str = "root"
     mysql_password: str = ""
-    cors_origins: str = "http://127.0.0.1:5500,http://localhost:5500"
+    cors_origins: str = "http://127.0.0.1:5500,http://localhost:5500,http://localhost:8080,http://127.0.0.1:8080"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
                 f"@{self.mysql_host}:{self.mysql_port}/{self.mysql_database}?charset=utf8mb4")
 
     @property
-    def allowed_origins(self) -> list[str]:
+    def allowed_origins(self):
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
 

@@ -1,5 +1,6 @@
 import json
 from datetime import date, datetime, time, timedelta
+from typing import Optional
 from uuid import uuid4
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +14,7 @@ from app.security import current_user, make_token, require_admin, verify_passwor
 from app.seed import seed_database
 
 app = FastAPI(title=settings.app_name, version="1.0.0", description="API quản lý quán café BlueIsland")
-app.add_middleware(CORSMiddleware, allow_origins=settings.allowed_origins or ["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 
 @app.on_event("startup")
@@ -28,7 +29,7 @@ def product_out(p: Product):
 
 
 def order_out(o: CafeOrder):
-    return {"id": o.id, "order_code": o.order_code, "order_type": o.order_type, "table_code": o.table_code, "customer_name": o.customer_name, "student_id": o.student_id, "payment_method": o.payment_method, "cash_received": o.cash_received, "subtotal": o.subtotal, "discount": o.discount, "total": o.total, "status": o.status, "staff_id": o.staff_id, "staff_name": o.staff.full_name if o.staff else "", "created_at": o.created_at.isoformat() if o.created_at else None, "items": [{"product_id": i.product_id, "name": i.product_name, "quantity": i.quantity, "unit_price": i.unit_price, "options": json.loads(i.options_json), "line_total": i.line_total} for i in o.items]}
+    return {"id": o.id, "order_code": o.order_code, "order_type": o.order_type, "table_code": o.table_code, "customer_name": o.customer_name, "student_id": o.student_id, "address": o.address, "phone_number": o.phone_number, "payment_method": o.payment_method, "cash_received": o.cash_received, "subtotal": o.subtotal, "discount": o.discount, "total": o.total, "status": o.status, "staff_id": o.staff_id, "staff_name": o.staff.full_name if o.staff else "", "created_at": o.created_at.isoformat() if o.created_at else None, "items": [{"product_id": i.product_id, "name": i.product_name, "quantity": i.quantity, "unit_price": i.unit_price, "options": json.loads(i.options_json), "line_total": i.line_total} for i in o.items]}
 
 
 @app.get("/api/health")
@@ -72,7 +73,7 @@ def categories(db: Session = Depends(get_db)):
 
 
 @app.get("/api/menu")
-def menu(q: str = "", category: str | None = None, available: bool = True, db: Session = Depends(get_db)):
+def menu(q: str = "", category: Optional[str] = None, available: bool = True, db: Session = Depends(get_db)):
     query = db.query(Product).join(Category).options(joinedload(Product.category))
     if available:
         query = query.filter(Product.is_available.is_(True))
@@ -118,7 +119,7 @@ def delete_product(product_id: int, db: Session = Depends(get_db), _: User = Dep
 
 
 @app.post("/api/orders", status_code=201)
-def create_order(payload: OrderInput, db: Session = Depends(get_db), user: User = Depends(current_user)):
+def create_order(payload: OrderInput, db: Session = Depends(get_db)):
     if payload.order_type not in ("dine-in", "takeaway") or payload.payment_method not in ("cash", "transfer"):
         raise HTTPException(422, "Loại đơn hoặc phương thức thanh toán không hợp lệ")
     ids = {line.product_id for line in payload.items}
@@ -130,9 +131,12 @@ def create_order(payload: OrderInput, db: Session = Depends(get_db), user: User 
         raise HTTPException(400, "Tiền khách đưa chưa đủ thanh toán")
     order = CafeOrder(order_code=f"BI-{datetime.now():%y%m%d}-{uuid4().hex[:6].upper()}", order_type=payload.order_type,
         table_code=payload.table_code if payload.order_type == "dine-in" else None,
-        customer_name=payload.customer_name or "Khách lẻ", student_id=payload.student_id,
+        customer_name=payload.customer_name or "Khách lẻ",
+        student_id=payload.student_id if payload.order_type == "dine-in" else None,
+        address=payload.address if payload.order_type == "takeaway" else None,
+        phone_number=payload.phone_number if payload.order_type == "takeaway" else None,
         payment_method=payload.payment_method, cash_received=payload.cash_received, subtotal=subtotal,
-        discount=discount, total=total, status="waiting", staff_id=user.id)
+        discount=discount, total=total, status="waiting", staff_id=None)
     for line in payload.items:
         product = products[line.product_id]
         options_cost = sum(max(0, int(opt.get("price", 0))) for opt in line.options)
@@ -148,13 +152,22 @@ def create_order(payload: OrderInput, db: Session = Depends(get_db), user: User 
 
 
 @app.get("/api/orders")
-def list_orders(status: str | None = None, from_date: date | None = None, to_date: date | None = None,
+def list_orders(status: Optional[str] = None, from_date: Optional[date] = None, to_date: Optional[date] = None,
                 db: Session = Depends(get_db), _: User = Depends(current_user)):
     q = db.query(CafeOrder).options(joinedload(CafeOrder.staff), joinedload(CafeOrder.items)).order_by(CafeOrder.created_at.desc())
     if status: q = q.filter(CafeOrder.status == status)
     if from_date: q = q.filter(CafeOrder.created_at >= datetime.combine(from_date, time.min))
     if to_date: q = q.filter(CafeOrder.created_at < datetime.combine(to_date + timedelta(days=1), time.min))
     return [order_out(o) for o in q.limit(500).all()]
+
+
+@app.get("/api/orders/track")
+def track_orders(codes: str = Query(default="", max_length=1000), db: Session = Depends(get_db)):
+    """Khách chưa đăng nhập tra trạng thái các đơn của mình theo mã đơn (chỉ trả mã và trạng thái, tối đa 50 mã)."""
+    wanted = [c.strip() for c in codes.split(",") if c.strip()][:50]
+    if not wanted: return []
+    rows = db.query(CafeOrder.order_code, CafeOrder.status).filter(CafeOrder.order_code.in_(wanted)).all()
+    return [{"order_code": code, "status": status} for code, status in rows]
 
 
 @app.patch("/api/orders/{order_id}/status")
@@ -177,7 +190,7 @@ def cancel_order(order_id: int, db: Session = Depends(get_db), _: User = Depends
 
 
 @app.get("/api/admin/stats/summary")
-def stats_summary(from_date: date | None = None, to_date: date | None = None, db: Session = Depends(get_db), _: User = Depends(require_admin)):
+def stats_summary(from_date: Optional[date] = None, to_date: Optional[date] = None, db: Session = Depends(get_db), _: User = Depends(require_admin)):
     start = datetime.combine(from_date or date.today(), time.min)
     end = datetime.combine((to_date or date.today()) + timedelta(days=1), time.min)
     rows = db.query(CafeOrder).filter(CafeOrder.created_at >= start, CafeOrder.created_at < end).all()
@@ -401,11 +414,16 @@ def list_closed_shifts(db: Session = Depends(get_db), _: User = Depends(require_
     ]
 
 
-# Phục vụ trực tiếp Frontend trên cùng cổng 5500 (đặt cuối file để ưu tiên /api/*)
+# Phục vụ trực tiếp Frontend trên cùng cổng (đặt cuối file để ưu tiên /api/*)
 from pathlib import Path as _Path
 from fastapi.staticfiles import StaticFiles
 
-_fe_dir = _Path(r"C:\Users\PC\OneDrive\Desktop\BlueIsland fe")
+_fe_dir = _Path(__file__).parent.parent.parent / "blueisland-fe" / "blueisland-fe"
 if _fe_dir.is_dir():
     app.mount("/", StaticFiles(directory=str(_fe_dir), html=True), name="frontend")
+else:
+    # Fallback: Try the other possible location
+    _fe_dir = _Path(__file__).parent.parent.parent / "blueisland_fe"
+    if _fe_dir.is_dir():
+        app.mount("/", StaticFiles(directory=str(_fe_dir), html=True), name="frontend")
 
